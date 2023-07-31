@@ -1,14 +1,8 @@
 package com.maxsavitsky;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 
 public class Main {
@@ -40,8 +34,6 @@ public class Main {
             1184,
             // "говорил, обращаясь к пунцово красному, взволнованному Ростову"
             1692,
-            // "Борис встал навстречу Ростову"
-            2816,
             // во всех этих случаях слова автора примерно такие "сказал кто-то Ростову",
             // то есть это обращения
             2978, 3101, 3308,
@@ -129,8 +121,7 @@ public class Main {
             1656,
             // "говорил Илагинский стремянный"
             5597,
-            // "Анатоль вздохнул и обнял Долохова"
-            1382, 6430
+            1382
     );
 
     // в данных случаях из-за пунктуации не удаётся распознавать слова автора и слова персонажа
@@ -154,29 +145,53 @@ public class Main {
 
     private static final Pattern SUBCHAPTER_PATTERN = Pattern.compile("[IVXLCDM]+");
     private static final Pattern HE_SHE_PATTERN = Pattern.compile(" она?(,| )");
+    private static final Pattern FRENCH_WORD_PATTERN = Pattern.compile("[a-zA-Z]+");
+
+    private static final int NUMBER_OF_LINES_TO_SKIP_IN_THE_BEGINNING = 13;
+    private static final int NUMBER_OF_LINES_TO_SKIP_IN_THE_ENDING = 9;
 
     private static final List<Replica> allReplicas = new ArrayList<>();
+    private static final List<Author> authors = new ArrayList<>();
+
+    private static final Author EMPTY_AUTHOR = new Author(List.of(), -1);
+
+    private static final Map<String, List<Replica>> separatedByNamesReplicasMap = new HashMap<>();
+    private static final Map<Integer, List<Replica>> separatedByIdsReplicasMap = new HashMap<>();
+
+    private static final Map<Integer, Integer> countOfAllocutionsToAuthorMap = new HashMap<>();
+    private static final Map<Integer, Integer> wordsCountOfAuthorMap = new HashMap<>();
+    private static final Map<Integer, Integer> frenchWordsCountOfAuthorMap = new HashMap<>();
 
     public static void main(String[] args) throws IOException {
         File souceFile = new File("war_and_peace.txt");
         List<String> lines = Files.lines(souceFile.toPath())
                 .toList();
 
+        File charactersFile = new File("characters_and_their_synonyms.txt");
+        List<String> allLines = Files.readAllLines(charactersFile.toPath());
+        List<List<String>> namesList = new ArrayList<>();
+        for (String line : allLines) {
+            String[] names = line.split(",");
+            namesList.add(Arrays.asList(names));
+        }
+
+        namesList.sort(Comparator.comparing(o -> o.get(0)));
+        for(int i = 0; i < namesList.size(); i++){
+            authors.add(new Author(namesList.get(i), i));
+        }
+
         splitIntoReplicas(lines);
 
-        BufferedWriter writer = new BufferedWriter(new FileWriter("filtered_characters.txt"));
-        for(String s : new HashSet<>(allReplicas.stream().map(r -> r.authorName).toList())) {
-            writer.write(s + "\n");
-        }
-        writer.flush();
-        writer.close();
+        printSortedNames();
+
+        analyzeText();
     }
 
     private static void splitIntoReplicas(List<String> lines) {
         int currentVolume = 0;
         int currentChapter = 0;
         //for(int i = 13; i < 20; i++){
-        for(int i = 13; i < lines.size(); i++){
+        for(int i = NUMBER_OF_LINES_TO_SKIP_IN_THE_BEGINNING; i < lines.size() - NUMBER_OF_LINES_TO_SKIP_IN_THE_ENDING; i++){
             String s = lines.get(i);
             if(s.isEmpty())
                 continue;
@@ -199,9 +214,13 @@ public class Main {
                 continue;
 
             List<Replica> replicas = getReplicasInLine(s, i + 1);
-            for(Replica r : replicas){
-                r.chapter = currentChapter;
-                r.volume = currentVolume;
+            for(Replica replica : replicas){
+                replica.chapter = currentChapter;
+                replica.volume = currentVolume;
+                separatedByNamesReplicasMap.computeIfAbsent(replica.authorName, k -> new ArrayList<>())
+                        .add(replica);
+                separatedByIdsReplicasMap.computeIfAbsent(replica.authorId, k -> new ArrayList<>())
+                        .add(replica);
             }
             allReplicas.addAll(replicas);
         }
@@ -213,7 +232,7 @@ public class Main {
         String name = null; // имя того, кто произносит слова
         int partStartIndex = 0;
         final boolean ignoreAuthor = IGNORE_AUTHOR_IN_THIS_LINES.contains(lineIndex);
-        for(int i = 1; i < line.length(); i++){
+        for(int i = 2; i < line.length(); i++){
             if(isJointOfSpeech(i, line)){
                 isAuthorWords = !isAuthorWords;
                 if(line.charAt(i + 1) == ']')
@@ -223,23 +242,29 @@ public class Main {
                 continue;
             }
             if(isAuthorWords && name == null && !ignoreAuthor){
+                int startIndex = i;
                 // в данном случае наиболее вероятным будет тот случай, когда имя персонажа будет написано самыым первым
                 // Пример: - ... - сказал Петя, - ...
 
                 // сдвигать нужно, чтобы избежать ложных случаев распознавания
                 // например: - ... - Сказал он...
-                i += 1;
+                //i += 1;
+
+                // Сдвиг делать больше не надо, так как имя может быть первым
+                // например: - ... - Наташа обратилась к ней.
+                // но в этот раз полученный результат будет проверяться по списку уже известных имён
 
                 while (i < line.length()
                         && !isJointOfSpeech(i, line)
                         && line.charAt(i) != '.'
                         && line.charAt(i) != '…'
+                        && line.charAt(i) != ';'
                         && !Character.isUpperCase(line.charAt(i))) {
                     i++;
                 }
                 if(i == line.length())
                     break;
-                if(line.charAt(i) == '.' || line.charAt(i) == '…'){
+                if(line.charAt(i) == '.' || line.charAt(i) == '…' || line.charAt(i) == ';'){
                     // в этом случае нужно пропускать следующие предложения, так как имя говорящего персонажа
                     // может быть только в первом предложении.
                     while(i < line.length() && !isJointOfSpeech(i, line))
@@ -277,6 +302,15 @@ public class Main {
                     j++;
                 }
                 name = line.substring(i, j);
+                // значит слова автора начинаются с заглавной буквы
+                // в данном случае необходимо проверить, что это именно имя
+                if(i == startIndex){
+                    if(!isAuthorNameExists(name)){
+                        name = null;
+                        i = startIndex;
+                        continue;
+                    }
+                }
                 i = j - 1;
                 continue;
             }
@@ -288,7 +322,7 @@ public class Main {
                 if(endIndex != line.length()){
                     // учитываем знак препинания, а также скобку, закрывающую перевод французских слов
                     endIndex++;
-                    if(line.charAt(j) == ']')
+                    if(line.charAt(endIndex) == ']')
                         endIndex++;
                 }
                 replicas.add(new Replica(line.substring(i, endIndex), lineIndex));
@@ -298,10 +332,29 @@ public class Main {
         // имён, которые заканчиваются на "у" в И.п., нет, так что скорее всего это обращение
         if(name != null && !name.contains(" ") && (name.endsWith("у") || name.endsWith("ых")))
             name = null;
-        for(Replica r : replicas)
-            r.authorName = name == null ? "undefined" : name;
+        if(name == null)
+            name = "undefined";
+        int authorId = getAuthorId(name);
+        for(Replica replica : replicas) {
+            System.out.println(name);
+            replica.authorName = name;
+            replica.authorId = authorId;
+        }
 
         return replicas;
+    }
+
+    private static boolean isAuthorNameExists(String name){
+        return authors.stream()
+                .anyMatch(a -> a.containsName(name));
+    }
+
+    private static int getAuthorId(String name){
+        return authors.stream()
+                .filter(author -> author.containsName(name))
+                .findFirst()
+                .orElse(EMPTY_AUTHOR)
+                .id;
     }
 
     private static boolean isJointOfSpeech(int i, String line){
@@ -326,17 +379,206 @@ public class Main {
                 || (s.equals(": –") && !line.startsWith("или", i - 3));
     }
 
+    private static void printSortedNames() throws IOException {
+        System.out.println("Имена персонажей по возрастанию:");
+        try(BufferedWriter writer = new BufferedWriter(new FileWriter("sorted_names.txt"))) {
+            for (Author author : authors) {
+                if(author.id == 3)
+                    continue;
+                System.out.println(author.getFormattedName());
+                writer.write(author.getFormattedName() + "\n");
+            }
+        }
+        System.out.println("Имена экспортированы в файл sorted_names.txt");
+    }
+
+    private static void analyzeText() throws IOException {
+        analyzeTotalCountOfWords();
+        analyzeReplicas();
+    }
+
+    private static void analyzeTotalCountOfWords() throws IOException {
+        File sourceFile = new File("war_and_peace.txt");
+        List<String> list = Files.lines(sourceFile.toPath())
+                .skip(NUMBER_OF_LINES_TO_SKIP_IN_THE_BEGINNING)
+                .toList();
+
+        int totalCount = 0;
+
+        Pattern pattern = Pattern.compile("^([IVXLCDM]+|Том|ЧАСТЬ)");
+        for (int i = 0; i < list.size() - NUMBER_OF_LINES_TO_SKIP_IN_THE_ENDING; i++) {
+            String s = list.get(i);
+            if (s.isEmpty() || pattern.matcher(s).matches())
+                continue;
+
+            // здесь будет строка без вставок
+            StringBuilder sb = new StringBuilder();
+            int pos = s.startsWith(DASH + " ") ? 2 : 0;
+            while (true) {
+                int p = s.indexOf('[', pos);
+                if (p == -1) {
+                    sb.append(s.substring(pos));
+                    break;
+                }
+                sb.append(s, pos, Math.max(p - 1, 0));
+                p = s.indexOf(']', p);
+                if (p == -1)
+                    break;
+                pos = p + 1;
+            }
+
+            int count = getCountOfWords(sb.toString());
+            totalCount += count;
+        }
+        System.out.println("Общее кол-во слов романа: " + totalCount);
+    }
+
+    private static void analyzeReplicas(){
+        analyzeCountOfWordsInReplicas();
+        analyzeAllocutions();
+    }
+
+    private static void analyzeCountOfWordsInReplicas(){
+        int wordsCount = 0;
+        int frenchWordsCount = 0;
+        for(Replica replica : allReplicas) {
+            int authorId = replica.authorId;
+            System.out.println(authorId);
+            int count = getCountOfWords(replica.textWithoutInserts);
+            wordsCountOfAuthorMap.put(authorId, count + wordsCountOfAuthorMap.getOrDefault(authorId, 0));
+            wordsCount += count;
+
+            count = getCountOfFrenchWords(replica.textWithoutInserts);
+            frenchWordsCountOfAuthorMap.put(authorId, count + frenchWordsCountOfAuthorMap.getOrDefault(authorId, 0));
+            frenchWordsCount += count;
+        }
+        System.out.println("\nОбщий объем в словах прямой речи (без учёта вставок с переводом): " + wordsCount);
+        System.out.printf("Из них %d слов на французском%n", frenchWordsCount);
+
+        var list = new ArrayList<>(wordsCountOfAuthorMap.entrySet());
+        list.sort((o1, o2) -> Integer.compare(o2.getValue(), o1.getValue()));
+        System.out.println("\nПерсонажи и кол-во сказанных ими слов (общее кол-во/на русском/на французском):");
+        try(FileWriter fw = new FileWriter("analysis_data/words_count_per_character.csv")) {
+            for (var entry : list) {
+                String authorName = authors.get(entry.getKey()).getFormattedName();
+                int totalCount = entry.getValue();
+                int frenchCount = frenchWordsCountOfAuthorMap.get(entry.getKey());
+                System.out.println(authorName + ": " + totalCount + ", " + (totalCount - frenchCount) + ", " + frenchCount);
+                fw.write("\"%s\",%d,%d,%d\n".formatted(authorName, totalCount, totalCount - frenchCount, frenchCount));
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        System.out.println("Данные экспортированы в файл analysis_data/words_count_per_character.csv");
+    }
+
+    private static void analyzeAllocutions(){
+        for(Replica replica : allReplicas){
+            String[] parts = replica.textWithoutInserts.split(",");
+            for(String part : parts){
+                int id = getAuthorId(part.trim());
+                if(id == -1)
+                    continue;
+                countOfAllocutionsToAuthorMap.put(
+                        id,
+                        countOfAllocutionsToAuthorMap.getOrDefault(id, 0) + 1
+                );
+            }
+        }
+        List<Map.Entry<Integer, Integer>> list = new ArrayList<>(countOfAllocutionsToAuthorMap.entrySet());
+        list.sort((o1, o2) -> Integer.compare(o2.getValue(), o1.getValue()));
+
+        System.out.println("\nКол-во обращений к персонажам (по убыванию):");
+        try(FileWriter fw = new FileWriter("analysis_data/count_of_allocutions.csv")) {
+            for (var entry : list) {
+                String authorName = authors.get(entry.getKey()).getFormattedName();
+                System.out.println(authorName + " " + entry.getValue());
+                fw.write("\"" + authorName + "\"," + entry.getValue() + "\n");
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        System.out.println("Данные экспортированы в файл analysis_data/count_of_allocutions.csv");
+    }
+
+    private static int getCountOfWords(String text){
+        int count = 0;
+        char[] charArray = text.trim().toCharArray();
+        for (int i = 0; i < charArray.length; i++) {
+            char c = charArray[i];
+            if (c == ' ' && i + 1 < charArray.length
+                    && charArray[i + 1] != DASH && charArray[i + 1] != ' ')
+                count++;
+        }
+
+        return count + 1;
+    }
+
+    private static int getCountOfFrenchWords(String text){
+        String[] words = text.trim().split(" ");
+        int count = 0;
+        for(String word : words){
+            if(FRENCH_WORD_PATTERN.matcher(word).find())
+                count++;
+        }
+        return count;
+    }
+
     private static class Replica {
         private final int lineIndex;
         private final String text;
+        // текст без переводов французских слов
+        private final String textWithoutInserts;
         private String authorName;
+        private int authorId;
         private int chapter;
         private int volume;
 
         public Replica(String text, int lineIndex) {
             this.text = text;
+            this.textWithoutInserts = removeInserts(text);
             this.lineIndex = lineIndex;
         }
+
+        private String removeInserts(String line){
+            StringBuilder sb = new StringBuilder();
+            boolean insertStarted = false;
+            for(int i = 0; i < line.length(); i++){
+                if(line.charAt(i) == ' ' && line.charAt(i + 1) == '['){
+                    insertStarted = true;
+                }else if(line.charAt(i) == ']'){
+                    insertStarted = false;
+                }else if(!insertStarted){
+                    sb.append(line.charAt(i));
+                }
+            }
+            return sb.toString();
+        }
+    }
+
+    private static class Author {
+        private final List<String> synonyms;
+        private final int id;
+
+        public Author(List<String> synonyms, int id) {
+            this.synonyms = synonyms;
+            this.id = id;
+        }
+
+        public boolean containsName(String name){
+            return synonyms.contains(name);
+        }
+
+        public String getFormattedName(){
+            String result = synonyms.get(0);
+            if(synonyms.size() > 1){
+                result += " ("
+                        + String.join(", ", synonyms.subList(1, synonyms.size()))
+                        + ")";
+            }
+            return result;
+        }
+
     }
 
 }
