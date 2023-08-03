@@ -337,7 +337,6 @@ public class Main {
             name = "undefined";
         int authorId = getAuthorId(name);
         for(Replica replica : replicas) {
-            System.out.println(name);
             replica.authorName = name;
             replica.authorId = authorId;
         }
@@ -444,7 +443,6 @@ public class Main {
         int frenchWordsCount = 0;
         for(Replica replica : allReplicas) {
             int authorId = replica.authorId;
-            System.out.println(authorId);
             int count = getCountOfWords(replica.textWithoutInserts);
             wordsCountOfAuthorMap.put(authorId, count + wordsCountOfAuthorMap.getOrDefault(authorId, 0));
             wordsCount += count;
@@ -454,7 +452,7 @@ public class Main {
             frenchWordsCount += count;
         }
         System.out.println("\nОбщий объем в словах прямой речи (без учёта вставок с переводом): " + wordsCount);
-        System.out.printf("Из них %d слов на французском%n", frenchWordsCount);
+        System.out.println("Из них %d слов на французскомn".formatted(frenchWordsCount));
 
         var list = new ArrayList<>(wordsCountOfAuthorMap.entrySet());
         list.sort((o1, o2) -> Integer.compare(o2.getValue(), o1.getValue()));
